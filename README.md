@@ -1,361 +1,180 @@
-# IMAP API
+# imapapi — mailcow addon
 
-Self hosted application to access IMAP and SMTP accounts over REST. Integrate email accounts with your service with ease!
+Minimal, stateless REST facade for IMAP, designed as an addon that runs
+alongside [mailcow-dockerized](https://mailcow.email) and uses a user's
+mailcow credentials to authenticate every request. No database, no
+credential store, no persistent account registry — just HTTP Basic Auth
+in front of IMAP.
 
-## Use cases
+> **Fork notice.** This is a hard fork of [`imapapi` by Andris
+> Reinman](https://github.com/andris9/imapapi) (AGPL-3.0). The upstream
+> is a general-purpose IMAP sync engine with workers, Redis, webhooks
+> and a web UI; this fork strips all of that and replaces it with a
+> ~900-LoC single-process proxy aimed at mailcow.
 
--   Email applications (lightweight webmail and mobile apps etc. that do not want to process IMAP and MIME)
--   Syncing users' emails into your service and sending out emails on behalf of your users (helpdesk software etc.)
+---
 
-## Let's Go!
+## How it works
 
-Make sure you have latest (at least v12.16.0) [Node.js](https://nodejs.org/api/) installed. Run IMAP API straight from NPM without downloading or installing anything manually:
+Every API call carries `Authorization: Basic <base64(email:password)>`.
+On each request:
 
-```
-$ npx imapapi --dbs.redis="redis://127.0.0.1:6379"
-```
+1. The credentials hash is looked up in a SQLite (WAL) auth cache.
+2. On miss, the addon attempts an IMAP LOGIN against mailcow's Dovecot.
+   The result (valid/invalid) is cached with a short TTL.
+3. Valid requests acquire a pooled IMAP connection for that user, run
+   the operation against mailcow's Dovecot, and release the connection.
 
-Next open [http://127.0.0.1:3000/](http://127.0.0.1:3000/) in your browser for Web UI and documentation.
+No credentials are ever written to disk. The cache stores only SHA-256
+hashes with expiry timestamps.
 
-## Features
+## Requirements
 
--   IMAP API allows simple access to IMAP accounts via REST based API. No need to know IMAP or MIME internals, you get a "normal" API with paged message listings. All text (that is subjects, email addresses, text and html content etc) is utf-8. Attachments are automatically decoded to binary representation.
--   Partial text download. You can obviously download the entire rfc822 formatted raw message but it might be easier to use provided paging and message details. This also allows to specifiy maximum size for downloaded text content. Sometimes automated cron scripts etc send emails with 10+MB text so to avoid downloading that stuff IMAP API allows to set max cap size for text.
--   Whenever something happens on tracked accounts IMAP API posts notification over a webhook. This includes new messages, deleted messages and message flag changes.
--   No data ever leaves your system
--   Easy email sending. If you specify the message you are responding to or forwarding then IMAP API sets all required headers, updates references message's flags in IMAP and also uploads message to the Sent Mail folder after sending.
--   IMAP API is a rather thin wrapper over IMAP. This means it does not have a storage of its own. It also means that if the IMAP connection is currently not open, you get a gateway error as a result of your API request.
--   IMAP API keeps a single persistent IMAP connection open against every registered user account. To stop syncing you must remove the account from IMAP API. This is different from some webmail implementations where connections are kept open during user session only.
+- A running mailcow-dockerized install on the same host.
+- Docker + Docker Compose v2.
 
-## Comparison with other systems
+## Install (mailcow-upgrade-safe)
 
-#### 1. Context.io
+Clone this repo **outside** `/opt/mailcow-dockerized/` so mailcow's
+`update.sh` never touches it:
 
-It was closed down, so there's nothing to compare.
-
-#### 2. Nylas Sync Engine (open source version)
-
-Even though still available from Github, it has clearly been abandoned, so not going to take a deep look into it.
-
--   Nylas Sync Engine is unmaintained (there are forks though that are kept under life support), unlike IMAP API
--   IMAP API has way lower resource requirements, you can run it basically from anywhere.
--   IMAP API is super easy to get started with. No need to install additional dependencies besides Redis, no need to manage Python virtual environments. Just run the app from command line and that's it.
-
-#### 3. Nylas Universal Email API
-
--   Nylas Email API is a service while IMAP API is a self hosted application. Your data never leaves your system when using IMAP API while Nylas can not even operate without copying your customers' data and emails to their servers.
--   Nylas in general tries to do everything while IMAP API only tries to handle the hard parts.
--   Nylas supports both IMAP and Exchange while IMAP API currently supports just IMAP. This might change in the future though.
--   No rate limiting in IMAP API (IMAP calls could be rate limited by the IMAP server though)
-
-## Usage
-
-### Requirements
-
--   **Redis** – any version
--   **Node.js** - v12.16.0 or newer
-
-### Installation
-
-Install dependencies
-
-```
-$ npm install --production
+```bash
+git clone https://github.com/jr551/imapapi-ng /opt/imapapi
+cd /opt/imapapi
+cp .env.example .env   # tweak if you want non-defaults
+docker compose up -d --build
 ```
 
-### Run
+Verify:
 
-Run using [default settings](config/default.toml)
-
-```
-$ node server.js
-```
-
-Or use custom Redis connection URL
-
-```
-$ node server.js --dbs.redis="redis://127.0.0.1:6379"
+```bash
+curl -s http://127.0.0.1:3001/health
+# {"ok":true,"cache":0,"pool":0}
 ```
 
-Once application is started open http://127.0.0.1:3000/ for instructions and API documentation.
+Uninstall:
 
-## Screenshots
-
-**1. General overview**
-
-![](https://cldup.com/byNCV6brIO.png)
-
-**2. Account states**
-
-![](https://cldup.com/F2G4m3FWUT.png)
-
-**3. Documentation**
-
-![](https://cldup.com/foHXymkVBw.png)
-
-**4. Settings**
-
-![](https://cldup.com/aZj55OpeCl.png)
-
-**5. Download stored logs**
-
-![](https://cldup.com/AqFCHZbVvL.png)
-
-**6. Swagger**
-
-![](https://cldup.com/mK0aS_uVfQ.png)
-
-## Config mapping
-
-| Configuration option | CLI argument           | ENV value            | Default                      |
-| -------------------- | ---------------------- | -------------------- | ---------------------------- |
-| Redis connection URL | `--dbs.redis="url"`    | `REDIS_URL="url"`    | `"redis://127.0.0.1:6379/8"` |
-| Host to bind to      | `--api.host="1.2.3.4"` | `API_HOST="1.2.3.4"` | `"127.0.0.1"`                |
-| Port to bind to      | `--api.port=port`      | `API_HOST=port`      | `3000`                       |
-| Log level            | `--log.level="level"`  | `LOG_LEVEL=level`    | `"trace"`                    |
-
-> **NB!** environment variables override CLI arguments. CLI arguments override configuration file values.
-
-If available then IMAP API uses dotenv file from project root to populate environment variables.
-
-## Example
-
-#### 1. Set up webhook target
-
-Open the <em>Settings</em> tab and set an URL for webhooks. Whenever something happens with any of the tracked email accounts you get a notification to this URL.
-
-For example if flags are updated for a message you'd get a notification that looks like this:
-
-```json
-{
-    "account": "example",
-    "path": "[Google Mail]/All Mail",
-    "event": "messageUpdated",
-    "data": {
-        "id": "AAAAAQAAAeE",
-        "uid": 350861,
-        "changes": {
-            "flags": {
-                "added": ["\\Seen"]
-            }
-        }
-    }
-}
+```bash
+cd /opt/imapapi && docker compose down -v
+rm -rf /opt/imapapi
 ```
 
-#### 2. Register an email account with IMAP API
+The addon makes **zero** edits to mailcow's working tree, compose file,
+or `mailcow.conf`. It joins mailcow's existing docker network as
+`external`; override `MAILCOW_NETWORK` in `.env` if a future mailcow
+version renames its network.
 
-You need IMAP and SMTP settings and also provide some kind of an identification string value for this account. You can use the same IDs as your main system or generate some unique ones. This value is later needed to identify this account and to perform operations on it.
+## Public exposure
 
-> **NB!** Trying to create a new account with the same ID updates the existing account.
+By default the container publishes port `3001` on all interfaces. You
+have two options:
 
-```
-$ curl -XPOST "localhost:3000/v1/account" -H "content-type: application/json" -d '{
-    "account": "example",
-    "name": "My Example Account",
-    "imap": {
-        "host": "imap.gmail.com",
-        "port": 993,
-        "secure": true,
-        "auth": {
-            "user": "myuser@gmail.com",
-            "pass": "verysecret"
-        }
-    },
-    "smtp": {
-        "host": "smtp.gmail.com",
-        "port": 465,
-        "secure": true,
-        "auth": {
-            "user": "myuser@gmail.com",
-            "pass": "verysecret"
-        }
-    }
-}'
-```
+- **Direct with TLS.** Set `TLS_CERT` and `TLS_KEY` to mailcow's cert
+  files, e.g.
+  `TLS_CERT=/opt/mailcow-dockerized/data/assets/ssl/cert.pem`. Mount
+  them read-only into the container.
+- **Behind mailcow's nginx.** Set `BIND_ADDR=127.0.0.1` and add a custom
+  `data/conf/nginx/site.imapapi.custom` in mailcow proxying `/imapapi/`
+  to `http://host.docker.internal:3001/` (preserves mailcow's cert).
+  This file survives `update.sh`.
 
-#### 3. That's about it to get started
+## Configuration
 
-Now whenever something happens you get a notification. If this is not enought then you can perform normal operations with the IMAP account as well.
+All settings are env vars; see `.env.example` for the full list.
 
-#### List some messages
-
-IMAP API returns paged results, newer messages first. So to get the first page or in other words the newest messages in a mailbox folder you can do it like this (notice the "example" id string that we set earlier in the request URL):
-
-```
-$ curl -XGET "localhost:3000/v1/account/example/messages?path=INBOX"
-```
-
-In the response you should see a listing of messages.
-
-```json
-{
-    "page": 0,
-    "pages": 10,
-    "messages": [
-        {
-            "id": "AAAAAQAAAeE",
-            "uid": 481,
-            "date": "2019-10-07T06:05:23.000Z",
-            "size": 4334,
-            "subject": "Test message",
-            "from": {
-                "name": "Peter Põder",
-                "address": "Peter.Poder@example.com"
-            },
-            "to": [
-                {
-                    "name": "",
-                    "address": "andris@imapapi.com"
-                }
-            ],
-            "messageId": "<0ebdd7b084794911b03986c827128f1b@example.com>",
-            "text": {
-                "id": "AAAAAQAAAeGTkaExkaEykA",
-                "encodedSize": {
-                    "plain": 17,
-                    "html": 2135
-                }
-            }
-        }
-    ]
-}
-```
-
-When fetching next page, add `page` query argument to the URL. Pages are zero indexes so if the server shows that there are 10 pages in total, it means you can query from `page=0` to `page=9`. If you want longer pages, use `pageSize` query argument.
-
-```
-$ curl -XGET "localhost:3000/v1/account/example/messages?path=INBOX&page=5"
-```
-
-#### Send an email
-
-The following is an example of how to send a reply. In this case you should specify a reference message you are replying to (NB! this message must exist). Use the "id" from message listing as the "reference.message" value.
-
-If referenced message was not found from the IMAP account then API responds with a 404 error and does not send out the reply.
-
-```
-curl -XPOST "localhost:3000/v1/account/example/submit" -H "content-type: application/json" -d '{
-    "reference": {
-        "message": "AAAAAQAAAeE",
-        "action": "reply"
-    },
-    "from": {
-        "name": "Example Sender",
-        "address": "sender@example.com"
-    },
-    "to": [{
-        "name": "Andris Reinman",
-        "address": "andris@imapapi.com"
-    }],
-    "text": "my reply to you",
-    "html": "<p>my reply to you</p>",
-    "attachments": [
-        {
-            "filename": "checkmark.png",
-            "content": "iVBORw0KGgoAAAANSUhEUgAAABAAAAAQAQMAAAAlPW0iAAAABlBMVEUAAAD///+l2Z/dAAAAM0lEQVR4nGP4/5/h/1+G/58ZDrAz3D/McH8yw83NDDeNGe4Ug9C9zwz3gVLMDA/A6P9/AFGGFyjOXZtQAAAAAElFTkSuQmCC"
-        }
-    ]
-}'
-```
-
-**NB!** if you are sending a standalone email then you most probably want to set `subject` value as well. For replies and forwards, IMAP API sets subject itself, based on the referenced message.
-
-**When sending a referenced message:**
-
--   IMAP API sets correct In-Reply-To and Referenced message headers to the outgoing message
--   If subject is not set, then IMAP API derives it from the referenced message and adds Re: or Fwd: prefix to it
--   IMAP API sets `\Answered` flag to the referenced message
-
-**For all messages:**
-
--   IMAP API uploads sent message to Sent Mail folder (if the folder can be detected automatically)
--   IMAP API does not upload to Sent Mail folder when the account is Gmail/GSuite as Gmail does this automatically
-
-## Using OAuth2
-
-IMAP API does not manage OAuth2 access tokens, you have to provide these yourself. This means that every time IMAP API needs to authenticate an OAuth2 account, it makes a HTTP request to your authentication server. This server is responsible of respoding with a valid access token.
-
-You can find an example authentication server implementation from [examples/auth-server.js](examples/auth-server.js).
-
-#### To use authentication server:
-
--   You must set `useAuthServer:true` flag for the account settings and not set `auth` value
--   Set authentication server URL in the _Settings_ page, the same way you set the webhook URL
--   IMAP API makes HTTP request against authentication server URL with 2 extra GET params: `account` and `proto`, eg `url?account=example&proto=imap`
--   Authentication server must respond with a correct JSON structure for this account
-
-**Register managed account**
-
-```
-curl -XPOST "localhost:3000/v1/account" -H "content-type: application/json" -d '{
-    "account": "ouath-user",
-    "name": "Example",
-    "imap": {
-        "host": "imap.gmail.com",
-        "port": 993,
-        "secure": true,
-        "useAuthServer": true
-    },
-    "smtp": {
-        "host": "smtp.gmail.com",
-        "port": 465,
-        "secure": true,
-        "useAuthServer": true
-    }
-}'
-```
-
-**Auth server response for OAuth2 accounts:**
-
-```json
-{
-    "user": "username@gmail.com",
-    "accessToken": "jhdfgsjfmbsdmg"
-}
-```
-
-**Auth server response for password based accounts:**
-
-```json
-{
-    "user": "username@gmail.com",
-    "pass": "verysecret"
-}
-```
+| Var | Default | Notes |
+|---|---|---|
+| `PORT` | `3001` | Host listen port |
+| `BIND_ADDR` | `0.0.0.0` | `127.0.0.1` when fronted by nginx |
+| `IMAP_HOST` | `dovecot-mailcow` | mailcow Dovecot service |
+| `IMAP_PORT` | `143` | Plain or STARTTLS port |
+| `IMAP_SECURE` | `false` | `true` = implicit TLS (993) |
+| `CACHE_TTL_VALID_MS` | `60000` | Positive-auth cache TTL |
+| `CACHE_TTL_INVALID_MS` | `10000` | Negative-auth cache TTL |
+| `POOL_MAX` | `50` | Max live IMAP connections |
+| `POOL_IDLE_MS` | `30000` | Idle connection eviction |
+| `TLS_CERT` / `TLS_KEY` | — | Optional HTTPS termination |
+| `LOG_LEVEL` | `info` | pino level |
+| `MAILCOW_NETWORK` | `mailcowdockerized_mailcow-network` | Override if mailcow renames it |
 
 ## API
 
-Entire API descripion is available in the application as a swagger page.
+All routes except `/health` require `Authorization: Basic …`. Errors are
+returned as RFC 7807 `application/problem+json`.
 
-## Monitoring
+### Mailboxes
 
-There is a Prometheus output available at `/metrics` URL path of the app.
+| Method | Path | Purpose |
+|---|---|---|
+| GET | `/v1/mailboxes` | List all mailboxes |
+| POST | `/v1/mailboxes` | Create `{"path": "..."}` |
+| PUT | `/v1/mailboxes/:path` | Rename `{"newPath": "..."}` |
+| DELETE | `/v1/mailboxes/:path` | Delete (rejects INBOX) |
 
-## App access
+### Messages
 
-**There is no authentication?**
+| Method | Path | Purpose |
+|---|---|---|
+| GET | `/v1/mailboxes/:path/messages?page=&pageSize=&search=` | Paged list, newest first |
+| GET | `/v1/mailboxes/:path/messages/:uid` | Parsed message (text/html/attachments) |
+| GET | `/v1/mailboxes/:path/messages/:uid/raw` | Full rfc822 source |
+| GET | `/v1/mailboxes/:path/messages/:uid/attachments/:id` | Binary attachment |
+| PUT | `/v1/mailboxes/:path/messages/:uid/flags` | `{"add":[],"remove":[],"set":[]}` |
+| PUT | `/v1/mailboxes/:path/messages/:uid/move` | `{"path": "..."}` |
+| DELETE | `/v1/mailboxes/:path/messages/:uid` | Mark \Deleted + expunge |
 
-That's right. The app itself (both web UI and API endpoints) does not implement any kind of authentication or ACL. Idea being that IMAP API only only handles IMAP access and everything else is left to the user as every system is different.
+`:path` is URL-encoded so IMAP namespaces like `Archive/2024` become
+`Archive%2F2024`.
 
-By default IMAP API allows connections only from localhost. To change this either edit config file or use `--api.host="0.0.0.0"` cli option. This would enable outside access, so you should use firewall to only allow your own app to access it. For web UI the suggestion is to use Nginx or Apache proxy with HTTP Basic Authentication, probably for VPN addresses only.
+### Health
 
-## Future features
+| Method | Path | Auth |
+|---|---|---|
+| GET | `/health` | none |
 
--   **Horizontal scaling.** Currently you can start a single instance of IMAP API application. In the future you should be able to start several and in different servers, depending on the number of accounts you need to track.
--   **MS Exchange support.** Event though the app is called IMAP API the plan is to start supporting ActiveSync as well. It does not happen any time soon though, mostly because I do not have access to a good testing environment and I'm not competent enough to set up my own Exchange system.
+### Example
+
+```bash
+AUTH=$(printf 'user@example.com:hunter2' | base64)
+curl -H "Authorization: Basic $AUTH" http://127.0.0.1:3001/v1/mailboxes
+```
+
+## Development
+
+```bash
+npm install
+npm test                 # unit tests (node:test, no network)
+npm run test:integration # starts a dovecot docker container, runs full E2E
+npm run dev              # watch-mode server on PORT (default 3001)
+```
+
+Integration tests build and run a minimal Dovecot 2.3 container
+(`test/integration/fixtures/dovecot/`) on a random local port and
+exercise every endpoint end-to-end. Requires Docker.
+
+## Security notes
+
+- Every request that isn't a cache hit hits Dovecot with the user's
+  credentials; a wrong password yields 401 and a short negative-TTL
+  cache entry.
+- Credentials are never logged or persisted. The SQLite cache stores
+  only `sha256(user:pass)` and an expiry.
+- There is no rate limiter — front the port with nginx/fail2ban or set
+  `BIND_ADDR=127.0.0.1` and proxy through mailcow.
+
+## What's removed vs upstream `imapapi`
+
+Upstream features this fork does **not** include:
+
+- Web UI, Bootstrap/jQuery assets, Swagger UI
+- Persistent account registry + Redis + Bull workers
+- Webhook notifications
+- OAuth2 support, SMTP sending
+- Worker threads (single-process model)
+
+If you need any of those, use the [upstream
+project](https://github.com/andris9/imapapi).
 
 ## License
 
-Licensed under GNU Affero General Public License v3.0 or later
-
-Commercial license available at request. Contact andris@imapapi.com for license issues.
-
-## Mailcow Integration
-
-IMAP API can be deployed as a mailcow addon service. See [MAILCOW_ADDON_README.md](MAILCOW_ADDON_README.md) for detailed instructions.
-
-Quick start:
-```bash
-./install-mailcow-addon.sh /opt/mailcow-dockerized
-```
+AGPL-3.0-or-later (inherited from upstream). See `LICENSE-Community.txt`.

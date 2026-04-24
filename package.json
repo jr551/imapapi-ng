@@ -1,6 +1,7 @@
 {
     "name": "imapapi",
     "version": "2.0.0",
+    "private": true,
     "description": "Minimal stateless mailcow addon — REST access to IMAP using mailcow credentials",
     "main": "src/server.js",
     "engines": {
