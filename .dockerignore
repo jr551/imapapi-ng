@@ -1,0 +1,10 @@
+node_modules
+.git
+.github
+dist
+*.md
+.env
+.eslintrc
+.prettierrc.js
+Gruntfile.js
+examples
