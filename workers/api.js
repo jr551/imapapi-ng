@@ -148,6 +148,28 @@ const failAction = async (request, h, err) => {
     throw error;
 };
 
+// Shared validation options used by every route
+const VALIDATE_OPTIONS = {
+    stripUnknown: false,
+    abortEarly: false,
+    convert: true
+};
+
+// Wraps a route handler to normalise error handling: re-throws Boom errors as-is
+// and wraps everything else in a Boom 500 (or uses err.statusCode when present).
+function wrapHandler(fn) {
+    return async function (...args) {
+        try {
+            return await fn(...args);
+        } catch (err) {
+            if (Boom.isBoom(err)) {
+                throw err;
+            }
+            throw Boom.boomify(err, { statusCode: err.statusCode || 500, decorate: { code: err.code } });
+        }
+    };
+}
+
 let callQueue = new Map();
 let mids = 0;
 
@@ -228,7 +250,7 @@ parentPort.on('message', message => {
                     cmd: 'resp',
                     mid: message.mid,
                     error: err.message,
-                    cod: err.code,
+                    code: err.code,
                     statusCode: err.statusCode
                 });
             });
@@ -322,30 +344,17 @@ const init = async () => {
         method: 'POST',
         path: '/v1/account',
 
-        async handler(request) {
+        handler: wrapHandler(async request => {
             let accountObject = new Account({ redis, call });
-
-            try {
-                let result = await accountObject.create(request.payload);
-                return result;
-            } catch (err) {
-                if (Boom.isBoom(err)) {
-                    throw err;
-                }
-                throw Boom.boomify(err, { statusCode: err.statusCode || 500, decorate: { code: err.code } });
-            }
-        },
+            return accountObject.create(request.payload);
+        }),
         options: {
             description: 'Register new account',
             notes: 'Registers new IMAP account to be synced',
             tags: ['api', 'account'],
 
             validate: {
-                options: {
-                    stripUnknown: false,
-                    abortEarly: false,
-                    convert: true
-                },
+                options: VALIDATE_OPTIONS,
                 failAction,
 
                 payload: Joi.object({
@@ -365,29 +374,17 @@ const init = async () => {
         method: 'PUT',
         path: '/v1/account/{account}',
 
-        async handler(request) {
+        handler: wrapHandler(async request => {
             let accountObject = new Account({ redis, account: request.params.account, call });
-
-            try {
-                return await accountObject.update(request.payload);
-            } catch (err) {
-                if (Boom.isBoom(err)) {
-                    throw err;
-                }
-                throw Boom.boomify(err, { statusCode: err.statusCode || 500, decorate: { code: err.code } });
-            }
-        },
+            return accountObject.update(request.payload);
+        }),
         options: {
             description: 'Update account info',
             notes: 'Updates account information',
             tags: ['api', 'account'],
 
             validate: {
-                options: {
-                    stripUnknown: false,
-                    abortEarly: false,
-                    convert: true
-                },
+                options: VALIDATE_OPTIONS,
                 failAction,
 
                 params: Joi.object({
@@ -408,29 +405,17 @@ const init = async () => {
         method: 'PUT',
         path: '/v1/account/{account}/reconnect',
 
-        async handler(request) {
+        handler: wrapHandler(async request => {
             let accountObject = new Account({ redis, account: request.params.account, call });
-
-            try {
-                return await accountObject.requestReconnect(request.payload);
-            } catch (err) {
-                if (Boom.isBoom(err)) {
-                    throw err;
-                }
-                throw Boom.boomify(err, { statusCode: err.statusCode || 500, decorate: { code: err.code } });
-            }
-        },
+            return accountObject.requestReconnect(request.payload);
+        }),
         options: {
             description: 'Request reconnect',
             notes: 'Requests connection to be reconnected',
             tags: ['api', 'account'],
 
             validate: {
-                options: {
-                    stripUnknown: false,
-                    abortEarly: false,
-                    convert: true
-                },
+                options: VALIDATE_OPTIONS,
                 failAction,
 
                 params: Joi.object({
@@ -448,29 +433,17 @@ const init = async () => {
         method: 'DELETE',
         path: '/v1/account/{account}',
 
-        async handler(request) {
+        handler: wrapHandler(async request => {
             let accountObject = new Account({ redis, account: request.params.account, call });
-
-            try {
-                return await accountObject.delete();
-            } catch (err) {
-                if (Boom.isBoom(err)) {
-                    throw err;
-                }
-                throw Boom.boomify(err, { statusCode: err.statusCode || 500, decorate: { code: err.code } });
-            }
-        },
+            return accountObject.delete();
+        }),
         options: {
             description: 'Remove synced account',
             notes: 'Stop syncing IMAP account and delete cached values',
             tags: ['api', 'account'],
 
             validate: {
-                options: {
-                    stripUnknown: false,
-                    abortEarly: false,
-                    convert: true
-                },
+                options: VALIDATE_OPTIONS,
                 failAction,
 
                 params: Joi.object({
@@ -484,39 +457,32 @@ const init = async () => {
         method: 'GET',
         path: '/v1/accounts',
 
-        async handler(request) {
-            try {
-                let accounts = await redis.smembers('ia:accounts');
-                let getStates = redis.pipeline();
-                for (let account of accounts) {
-                    getStates = getStates.hgetall(`iad:${account}`);
-                }
-
-                let results = await getStates.exec();
-                let accountList = results
-                    .map(
-                        row =>
-                            row &&
-                            row[1] && {
-                                account: row[1].account,
-                                name: row[1].name,
-                                state: row[1].state,
-                                syncTime: row[1].sync,
-                                lastError: row[1].state === 'connected' ? null : parseJSON(row[1].lastErrorState)
-                            }
-                    )
-                    .filter(row => row)
-                    .filter(row => !request.query.state || request.query.state === row.state)
-                    .sort((a, b) => a.account.toLowerCase().localeCompare(b.account.toLowerCase()));
-
-                return { accounts: accountList };
-            } catch (err) {
-                if (Boom.isBoom(err)) {
-                    throw err;
-                }
-                throw Boom.boomify(err, { statusCode: err.statusCode || 500, decorate: { code: err.code } });
+        handler: wrapHandler(async request => {
+            let accounts = await redis.smembers('ia:accounts');
+            let getStates = redis.pipeline();
+            for (let account of accounts) {
+                getStates = getStates.hgetall(`iad:${account}`);
             }
-        },
+
+            let results = await getStates.exec();
+            let accountList = results
+                .map(
+                    row =>
+                        row &&
+                        row[1] && {
+                            account: row[1].account,
+                            name: row[1].name,
+                            state: row[1].state,
+                            syncTime: row[1].sync,
+                            lastError: row[1].state === 'connected' ? null : parseJSON(row[1].lastErrorState)
+                        }
+                )
+                .filter(row => row)
+                .filter(row => !request.query.state || request.query.state === row.state)
+                .sort((a, b) => a.account.toLowerCase().localeCompare(b.account.toLowerCase()));
+
+            return { accounts: accountList };
+        }),
 
         options: {
             description: 'List accounts',
@@ -524,11 +490,7 @@ const init = async () => {
             tags: ['api', 'account'],
 
             validate: {
-                options: {
-                    stripUnknown: false,
-                    abortEarly: false,
-                    convert: true
-                },
+                options: VALIDATE_OPTIONS,
                 failAction,
 
                 query: Joi.object({
@@ -546,18 +508,10 @@ const init = async () => {
         method: 'GET',
         path: '/v1/account/{account}/mailboxes',
 
-        async handler(request) {
+        handler: wrapHandler(async request => {
             let accountObject = new Account({ redis, account: request.params.account, call });
-
-            try {
-                return { mailboxes: await accountObject.getMailboxListing() };
-            } catch (err) {
-                if (Boom.isBoom(err)) {
-                    throw err;
-                }
-                throw Boom.boomify(err, { statusCode: err.statusCode || 500, decorate: { code: err.code } });
-            }
-        },
+            return { mailboxes: await accountObject.getMailboxListing() };
+        }),
 
         options: {
             description: 'List mailboxes',
@@ -565,11 +519,7 @@ const init = async () => {
             tags: ['api', 'mailbox'],
 
             validate: {
-                options: {
-                    stripUnknown: false,
-                    abortEarly: false,
-                    convert: true
-                },
+                options: VALIDATE_OPTIONS,
                 failAction,
 
                 params: Joi.object({
@@ -583,18 +533,10 @@ const init = async () => {
         method: 'POST',
         path: '/v1/account/{account}/mailbox',
 
-        async handler(request) {
+        handler: wrapHandler(async request => {
             let accountObject = new Account({ redis, account: request.params.account, call });
-
-            try {
-                return await accountObject.createMailbox(request.payload.path);
-            } catch (err) {
-                if (Boom.isBoom(err)) {
-                    throw err;
-                }
-                throw Boom.boomify(err, { statusCode: err.statusCode || 500, decorate: { code: err.code } });
-            }
-        },
+            return accountObject.createMailbox(request.payload.path);
+        }),
 
         options: {
             description: 'Create mailbox',
@@ -602,11 +544,7 @@ const init = async () => {
             tags: ['api', 'mailbox'],
 
             validate: {
-                options: {
-                    stripUnknown: false,
-                    abortEarly: false,
-                    convert: true
-                },
+                options: VALIDATE_OPTIONS,
                 failAction,
 
                 params: Joi.object({
@@ -628,18 +566,10 @@ const init = async () => {
         method: 'DELETE',
         path: '/v1/account/{account}/mailbox',
 
-        async handler(request) {
+        handler: wrapHandler(async request => {
             let accountObject = new Account({ redis, account: request.params.account, call });
-
-            try {
-                return await accountObject.deleteMailbox(request.query.path);
-            } catch (err) {
-                if (Boom.isBoom(err)) {
-                    throw err;
-                }
-                throw Boom.boomify(err, { statusCode: err.statusCode || 500, decorate: { code: err.code } });
-            }
-        },
+            return accountObject.deleteMailbox(request.query.path);
+        }),
 
         options: {
             description: 'Delete mailbox',
@@ -647,11 +577,7 @@ const init = async () => {
             tags: ['api', 'mailbox'],
 
             validate: {
-                options: {
-                    stripUnknown: false,
-                    abortEarly: false,
-                    convert: true
-                },
+                options: VALIDATE_OPTIONS,
                 failAction,
 
                 params: Joi.object({
@@ -669,29 +595,17 @@ const init = async () => {
         method: 'GET',
         path: '/v1/account/{account}/message/{message}/source',
 
-        async handler(request) {
+        handler: wrapHandler(async request => {
             let accountObject = new Account({ redis, account: request.params.account, call });
-
-            try {
-                return await accountObject.getRawMessage(request.params.message);
-            } catch (err) {
-                if (Boom.isBoom(err)) {
-                    throw err;
-                }
-                throw Boom.boomify(err, { statusCode: err.statusCode || 500, decorate: { code: err.code } });
-            }
-        },
+            return accountObject.getRawMessage(request.params.message);
+        }),
         options: {
             description: 'Download raw message',
             notes: 'Fetches raw message as a stream',
             tags: ['api', 'message'],
 
             validate: {
-                options: {
-                    stripUnknown: false,
-                    abortEarly: false,
-                    convert: true
-                },
+                options: VALIDATE_OPTIONS,
                 failAction,
 
                 params: Joi.object({
@@ -706,29 +620,17 @@ const init = async () => {
         method: 'GET',
         path: '/v1/account/{account}/attachment/{attachment}',
 
-        async handler(request) {
+        handler: wrapHandler(async request => {
             let accountObject = new Account({ redis, account: request.params.account, call });
-
-            try {
-                return await accountObject.getAttachment(request.params.attachment);
-            } catch (err) {
-                if (Boom.isBoom(err)) {
-                    throw err;
-                }
-                throw Boom.boomify(err, { statusCode: err.statusCode || 500, decorate: { code: err.code } });
-            }
-        },
+            return accountObject.getAttachment(request.params.attachment);
+        }),
         options: {
             description: 'Download attachment',
             notes: 'Fetches attachment file as a stream',
             tags: ['api', 'message'],
 
             validate: {
-                options: {
-                    stripUnknown: false,
-                    abortEarly: false,
-                    convert: true
-                },
+                options: VALIDATE_OPTIONS,
                 failAction,
 
                 params: Joi.object({
@@ -748,29 +650,17 @@ const init = async () => {
         method: 'GET',
         path: '/v1/account/{account}/message/{message}',
 
-        async handler(request) {
+        handler: wrapHandler(async request => {
             let accountObject = new Account({ redis, account: request.params.account, call });
-
-            try {
-                return await accountObject.getMessage(request.params.message, request.query);
-            } catch (err) {
-                if (Boom.isBoom(err)) {
-                    throw err;
-                }
-                throw Boom.boomify(err, { statusCode: err.statusCode || 500, decorate: { code: err.code } });
-            }
-        },
+            return accountObject.getMessage(request.params.message, request.query);
+        }),
         options: {
             description: 'Get message information',
             notes: 'Returns details of a specific message. By default text content is not included, use textType value to force retrieving text',
             tags: ['api', 'message'],
 
             validate: {
-                options: {
-                    stripUnknown: false,
-                    abortEarly: false,
-                    convert: true
-                },
+                options: VALIDATE_OPTIONS,
                 failAction,
 
                 query: Joi.object({
@@ -798,29 +688,17 @@ const init = async () => {
         method: 'PUT',
         path: '/v1/account/{account}/message/{message}',
 
-        async handler(request) {
+        handler: wrapHandler(async request => {
             let accountObject = new Account({ redis, account: request.params.account, call });
-
-            try {
-                return await accountObject.updateMessage(request.params.message, request.payload);
-            } catch (err) {
-                if (Boom.isBoom(err)) {
-                    throw err;
-                }
-                throw Boom.boomify(err, { statusCode: err.statusCode || 500, decorate: { code: err.code } });
-            }
-        },
+            return accountObject.updateMessage(request.params.message, request.payload);
+        }),
         options: {
             description: 'Update message',
             notes: 'Update message information. Mainly this means changing message flag values',
             tags: ['api', 'message'],
 
             validate: {
-                options: {
-                    stripUnknown: false,
-                    abortEarly: false,
-                    convert: true
-                },
+                options: VALIDATE_OPTIONS,
                 failAction,
 
                 params: Joi.object({
@@ -845,29 +723,17 @@ const init = async () => {
         method: 'PUT',
         path: '/v1/account/{account}/message/{message}/move',
 
-        async handler(request) {
+        handler: wrapHandler(async request => {
             let accountObject = new Account({ redis, account: request.params.account, call });
-
-            try {
-                return await accountObject.moveMessage(request.params.message, request.payload);
-            } catch (err) {
-                if (Boom.isBoom(err)) {
-                    throw err;
-                }
-                throw Boom.boomify(err, { statusCode: err.statusCode || 500, decorate: { code: err.code } });
-            }
-        },
+            return accountObject.moveMessage(request.params.message, request.payload);
+        }),
         options: {
             description: 'Move message',
             notes: 'Move message to another folder',
             tags: ['api', 'message'],
 
             validate: {
-                options: {
-                    stripUnknown: false,
-                    abortEarly: false,
-                    convert: true
-                },
+                options: VALIDATE_OPTIONS,
                 failAction,
 
                 params: Joi.object({
@@ -886,29 +752,17 @@ const init = async () => {
         method: 'DELETE',
         path: '/v1/account/{account}/message/{message}',
 
-        async handler(request) {
+        handler: wrapHandler(async request => {
             let accountObject = new Account({ redis, account: request.params.account, call });
-
-            try {
-                return await accountObject.deleteMessage(request.params.message);
-            } catch (err) {
-                if (Boom.isBoom(err)) {
-                    throw err;
-                }
-                throw Boom.boomify(err, { statusCode: err.statusCode || 500, decorate: { code: err.code } });
-            }
-        },
+            return accountObject.deleteMessage(request.params.message);
+        }),
         options: {
             description: 'Delete message',
             notes: 'Move message to Trash or delete it if already in Trash',
             tags: ['api', 'message'],
 
             validate: {
-                options: {
-                    stripUnknown: false,
-                    abortEarly: false,
-                    convert: true
-                },
+                options: VALIDATE_OPTIONS,
                 failAction,
 
                 params: Joi.object({
@@ -923,29 +777,17 @@ const init = async () => {
         method: 'GET',
         path: '/v1/account/{account}/text/{text}',
 
-        async handler(request) {
+        handler: wrapHandler(async request => {
             let accountObject = new Account({ redis, account: request.params.account, call });
-
-            try {
-                return await accountObject.getText(request.params.text, request.query);
-            } catch (err) {
-                if (Boom.isBoom(err)) {
-                    throw err;
-                }
-                throw Boom.boomify(err, { statusCode: err.statusCode || 500, decorate: { code: err.code } });
-            }
-        },
+            return accountObject.getText(request.params.text, request.query);
+        }),
         options: {
             description: 'Retrieve message text',
             notes: 'Retrieves message text',
             tags: ['api', 'message'],
 
             validate: {
-                options: {
-                    stripUnknown: false,
-                    abortEarly: false,
-                    convert: true
-                },
+                options: VALIDATE_OPTIONS,
                 failAction,
 
                 query: Joi.object({
@@ -979,28 +821,17 @@ const init = async () => {
         method: 'GET',
         path: '/v1/account/{account}/messages',
 
-        async handler(request) {
+        handler: wrapHandler(async request => {
             let accountObject = new Account({ redis, account: request.params.account, call });
-            try {
-                return await accountObject.listMessages(request.query);
-            } catch (err) {
-                if (Boom.isBoom(err)) {
-                    throw err;
-                }
-                throw Boom.boomify(err, { statusCode: err.statusCode || 500, decorate: { code: err.code } });
-            }
-        },
+            return accountObject.listMessages(request.query);
+        }),
         options: {
             description: 'List messages in a folder',
             notes: 'Lists messages in a mailbox folder. For search query arguments use qs syntax (?search[unseen]=true)',
             tags: ['api', 'message'],
 
             validate: {
-                options: {
-                    stripUnknown: false,
-                    abortEarly: false,
-                    convert: true
-                },
+                options: VALIDATE_OPTIONS,
                 failAction,
 
                 params: Joi.object({
@@ -1043,28 +874,17 @@ const init = async () => {
         method: 'GET',
         path: '/v1/account/{account}/contacts',
 
-        async handler(request) {
+        handler: wrapHandler(async request => {
             let accountObject = new Account({ redis, account: request.params.account, call });
-            try {
-                return await accountObject.buildContacts();
-            } catch (err) {
-                if (Boom.isBoom(err)) {
-                    throw err;
-                }
-                throw Boom.boomify(err, { statusCode: err.statusCode || 500, decorate: { code: err.code } });
-            }
-        },
+            return accountObject.buildContacts();
+        }),
         options: {
             description: 'Builds a contact listing',
             notes: 'Builds a contact listings from email addresses. For larger mailboxes this could take a lot of time.',
             tags: [/*'api', */ 'experimental'],
 
             validate: {
-                options: {
-                    stripUnknown: false,
-                    abortEarly: false,
-                    convert: true
-                },
+                options: VALIDATE_OPTIONS,
                 failAction,
 
                 params: Joi.object({
@@ -1078,18 +898,10 @@ const init = async () => {
         method: 'POST',
         path: '/v1/account/{account}/submit',
 
-        async handler(request) {
+        handler: wrapHandler(async request => {
             let accountObject = new Account({ redis, account: request.params.account, call });
-
-            try {
-                return await accountObject.submitMessage(request.payload);
-            } catch (err) {
-                if (Boom.isBoom(err)) {
-                    throw err;
-                }
-                throw Boom.boomify(err, { statusCode: err.statusCode || 500, decorate: { code: err.code } });
-            }
-        },
+            return accountObject.submitMessage(request.payload);
+        }),
         options: {
             description: 'Submit message for delivery',
             notes:
@@ -1097,11 +909,7 @@ const init = async () => {
             tags: ['api', 'submit'],
 
             validate: {
-                options: {
-                    stripUnknown: false,
-                    abortEarly: false,
-                    convert: true
-                },
+                options: VALIDATE_OPTIONS,
                 failAction,
 
                 params: Joi.object({
@@ -1188,11 +996,7 @@ const init = async () => {
             tags: ['api', 'settings'],
 
             validate: {
-                options: {
-                    stripUnknown: false,
-                    abortEarly: false,
-                    convert: true
-                },
+                options: VALIDATE_OPTIONS,
                 failAction,
 
                 query: Joi.object(settingsQuerySchema).label('SettingsQuery')
@@ -1238,11 +1042,7 @@ const init = async () => {
             tags: ['api', 'settings'],
 
             validate: {
-                options: {
-                    stripUnknown: false,
-                    abortEarly: false,
-                    convert: true
-                },
+                options: VALIDATE_OPTIONS,
                 failAction,
 
                 payload: Joi.object(settingsSchema).label('Settings')
@@ -1262,11 +1062,7 @@ const init = async () => {
             tags: ['api', 'logs'],
 
             validate: {
-                options: {
-                    stripUnknown: false,
-                    abortEarly: false,
-                    convert: true
-                },
+                options: VALIDATE_OPTIONS,
                 failAction,
 
                 params: Joi.object({
@@ -1293,27 +1089,14 @@ const init = async () => {
         method: 'POST',
         path: '/v1/verifyAccount',
 
-        async handler(request) {
-            try {
-                return await verifyAccountInfo(request.payload);
-            } catch (err) {
-                if (Boom.isBoom(err)) {
-                    throw err;
-                }
-                throw Boom.boomify(err, { statusCode: err.statusCode || 500, decorate: { code: err.code } });
-            }
-        },
+        handler: wrapHandler(async request => verifyAccountInfo(request.payload)),
         options: {
             description: 'Verify IMAP and SMTP settings',
             notes: 'Checks if can connect and authenticate using provided account info',
             tags: ['api', 'account'],
 
             validate: {
-                options: {
-                    stripUnknown: false,
-                    abortEarly: false,
-                    convert: true
-                },
+                options: VALIDATE_OPTIONS,
                 failAction,
 
                 payload: Joi.object({
@@ -1415,7 +1198,7 @@ async function verifyAccountInfo(accountData) {
             response.imap = {
                 success: false,
                 error: err.message,
-                cod: err.code,
+                code: err.code,
                 statusCode: err.statusCode
             };
         }
@@ -1431,7 +1214,7 @@ async function verifyAccountInfo(accountData) {
             response.smtp = {
                 success: false,
                 error: err.message,
-                cod: err.code,
+                code: err.code,
                 statusCode: err.statusCode
             };
         }
