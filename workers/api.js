@@ -1119,6 +1119,34 @@ const init = async () => {
     });
 
     server.route({
+        method: 'GET',
+        path: '/health',
+        handler: async (request, h) => {
+            try {
+                // Check Redis connection
+                const accounts = await redis.smembers('ia:accounts');
+                return {
+                    status: 'ok',
+                    timestamp: new Date().toISOString(),
+                    redis: 'connected',
+                    accounts: accounts.length
+                };
+            } catch (err) {
+                return h.response({
+                    status: 'error',
+                    timestamp: new Date().toISOString(),
+                    error: err.message
+                }).code(500);
+            }
+        },
+        options: {
+            description: 'Health check endpoint',
+            notes: 'Returns health status of the IMAP API service',
+            tags: ['api', 'health']
+        }
+    });
+
+    server.route({
         method: '*',
         path: '/{any*}',
         async handler() {

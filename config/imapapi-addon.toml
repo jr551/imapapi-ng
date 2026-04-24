@@ -1,0 +1,15 @@
+# IMAP API Mailcow Addon Configuration
+# This configuration is optimized for running as a mailcow addon service
+
+[api]
+host = "0.0.0.0"
+port = 3000
+
+[dbs]
+# Redis connection - defaults to mailcow's redis-mailcow service
+# Use the same Redis instance as mailcow for shared infrastructure
+redis = "redis://redis-mailcow:6379/8"
+
+[log]
+# Log level - can be overridden by LOG_LEVEL environment variable
+level = "info"

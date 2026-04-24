@@ -350,3 +350,12 @@ By default IMAP API allows connections only from localhost. To change this eithe
 Licensed under GNU Affero General Public License v3.0 or later
 
 Commercial license available at request. Contact andris@imapapi.com for license issues.
+
+## Mailcow Integration
+
+IMAP API can be deployed as a mailcow addon service. See [MAILCOW_ADDON_README.md](MAILCOW_ADDON_README.md) for detailed instructions.
+
+Quick start:
+```bash
+./install-mailcow-addon.sh /opt/mailcow-dockerized
+```
