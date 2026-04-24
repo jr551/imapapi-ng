@@ -1,5 +1,6 @@
 'use strict';
 
+const { finished } = require('node:stream/promises');
 const { withClient, withMailbox, serializeListItem, serializeEnvelope } = require('../imap');
 const {
     messageListItemSchema,
@@ -174,7 +175,8 @@ module.exports = async function messageRoutes(app, { pool }) {
                 if (!dl || !dl.content) throw notFound('Message not found');
                 reply.header('content-type', 'message/rfc822');
                 if (dl.meta && dl.meta.size) reply.header('content-length', dl.meta.size);
-                return reply.send(dl.content);
+                reply.send(dl.content);
+                await finished(dl.content);
             })
         );
     });
@@ -193,7 +195,8 @@ module.exports = async function messageRoutes(app, { pool }) {
                 if (meta.filename) {
                     reply.header('content-disposition', `attachment; filename="${encodeURIComponent(meta.filename)}"`);
                 }
-                return reply.send(dl.content);
+                reply.send(dl.content);
+                await finished(dl.content);
             })
         );
     });
