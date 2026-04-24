@@ -1,5 +1,12 @@
 .DS_Store
-node_modules
+node_modules/
 licenses.csv
 .env
+.env.*
+!.env.example
 dist/
+data/
+*.log
+coverage/
+logs/
+npm-debug.log*

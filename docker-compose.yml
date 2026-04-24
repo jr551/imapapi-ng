@@ -1,41 +1,47 @@
-version: '3.8'
+# imapapi — minimal mailcow addon
+#
+# Install on the mailcow host *outside* /opt/mailcow-dockerized (e.g. /opt/imapapi/)
+# so mailcow's update.sh (which resets its own working tree) never touches this.
+#
+# The service joins mailcow's existing docker network as "external" and reaches
+# Dovecot at dovecot-mailcow:143. Override MAILCOW_NETWORK if a future mailcow
+# version renames its network.
 
 services:
-  redis:
-    image: redis:7-alpine
-    restart: always
-    ports:
-      - "6379:6379"
-    volumes:
-      - redis-data:/data
-    command: redis-server --appendonly yes
-
   imapapi:
     build:
       context: .
       dockerfile: Dockerfile
-    image: imapapi:latest
-    hostname: imapapi
-    restart: always
+    image: imapapi-mailcow:2.0.0
+    container_name: imapapi-mailcow
+    restart: unless-stopped
+    env_file: .env
     environment:
-      - TZ=UTC
-      - REDIS_URL=redis://redis:6379/8
-      - API_HOST=0.0.0.0
-      - API_PORT=3000
-      - LOG_LEVEL=info
+      PORT: ${PORT:-3001}
+      HOST: 0.0.0.0
+      IMAP_HOST: ${IMAP_HOST:-dovecot-mailcow}
+      IMAP_PORT: ${IMAP_PORT:-143}
+      IMAP_SECURE: ${IMAP_SECURE:-false}
+      IMAP_TLS_REJECT_UNAUTHORIZED: ${IMAP_TLS_REJECT_UNAUTHORIZED:-true}
+      CACHE_PATH: /data/cache.db
+      CACHE_TTL_VALID_MS: ${CACHE_TTL_VALID_MS:-60000}
+      CACHE_TTL_INVALID_MS: ${CACHE_TTL_INVALID_MS:-10000}
+      POOL_MAX: ${POOL_MAX:-50}
+      POOL_IDLE_MS: ${POOL_IDLE_MS:-30000}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
     ports:
-      - "3000:3000"
-    depends_on:
-      - redis
+      - "${BIND_ADDR:-0.0.0.0}:${PORT:-3001}:${PORT:-3001}"
     volumes:
-      - imapapi-logs:/var/log/imapapi
-    healthcheck:
-      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:3000/health"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 40s
+      - imapapi-data:/data
+    networks:
+      - mailcow-network
+    labels:
+      - "com.centurylinklabs.watchtower.enable=false"
 
 volumes:
-  redis-data:
-  imapapi-logs:
+  imapapi-data:
+
+networks:
+  mailcow-network:
+    external: true
+    name: ${MAILCOW_NETWORK:-mailcowdockerized_mailcow-network}
